@@ -27,6 +27,7 @@ import (
 	_ "github.com/go-python/gpython/stdlib/sys"
 	_ "github.com/go-python/gpython/stdlib/tempfile"
 	_ "github.com/go-python/gpython/stdlib/time"
+	_ "github.com/go-python/gpython/stdlib/threading"
 )
 
 func init() {
