@@ -47,6 +47,10 @@ type ModuleImpl struct {
 
 // ModuleStore is a container of Module imported into an owning py.Context.
 type ModuleStore struct {
+	// values is a generic value store.
+	values   map[string]any
+	valuesLo sync.RWMutex
+
 	// Registry of installed modules
 	modules map[string]*Module
 	// Builtin module
@@ -84,6 +88,7 @@ func (rt *Runtime) RegisterModule(impl *ModuleImpl) {
 
 func NewModuleStore() *ModuleStore {
 	return &ModuleStore{
+		values:  make(map[string]any),
 		modules: make(map[string]*Module),
 	}
 }
@@ -126,6 +131,43 @@ func (m *Module) Call(name string, args Tuple, kwargs StringDict) (Object, error
 
 // Interfaces
 var _ IGetDict = (*Module)(nil)
+
+func (store *ModuleStore) GetValue(key string) (any, bool) {
+	store.valuesLo.RLock()
+	defer store.valuesLo.RUnlock()
+
+	val, ok := store.values[key]
+	return val, ok
+}
+
+func (store *ModuleStore) GetOrSetValue(key string, alternative any) any {
+	store.valuesLo.Lock()
+	defer store.valuesLo.Unlock()
+
+	val, ok := store.values[key]
+	if ok {
+		return val
+	}
+
+	store.values[key] = alternative
+	
+	return alternative
+}
+
+
+func (store *ModuleStore) SetValue(key string, value any) {
+	store.valuesLo.Lock()
+	defer store.valuesLo.Unlock()
+
+	store.values[key] = value
+}
+
+func (store *ModuleStore) DeleteValue(key string) {
+	store.valuesLo.Lock()
+	defer store.valuesLo.Unlock()
+
+	delete(store.values, key)
+}
 
 // NewModule adds a new Module instance to this ModuleStore.
 // Each given Method prototype is used to create a new "live" Method bound this the newly created Module.

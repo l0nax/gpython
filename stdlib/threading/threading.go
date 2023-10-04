@@ -10,12 +10,26 @@ import (
 	"github.com/go-python/gpython/py"
 )
 
-const debugging = false
+const (
+	debugging        = true
+	annotThreadState = "__gpy_thread_state"
+)
 
-var PyThreadType = py.NewType("Thread", "")
+var (
+	PyThreadType  = py.NewType("Thread", "")
+	PyThreadState = py.NewType("ThreadState", "internal state representation of Thread")
+)
 
-//go:embed threading.py
-var threadModSrc string
+var (
+	//go:embed threading.py
+	threadModSrc string
+
+	// tidCounter is the global thread ID counter.
+	tidCounter atomic.Uint32
+
+	threadMap = make(map[uint32]*Thread)
+	threadLo  sync.Mutex
+)
 
 const (
 	// stateInitialized is the base state.
@@ -42,6 +56,7 @@ func init() {
 		},
 		Methods: []*py.Method{
 			py.MustNewMethod("Thread_new", ThreadNew, 0, ""),
+			py.MustNewMethod("Thread_current_thread", ThreadCurrentThread, 0, ""),
 		},
 	})
 
@@ -54,13 +69,39 @@ func init() {
 	})
 }
 
+// threadState is the thread state.
+type threadState struct {
+	lo sync.RWMutex
+
+	// tid is the thread ID.
+	// The ID starts from 1.
+	// A 0 value indicates that the code is beeing executed
+	// in the main (context) routine.
+	tid uint32
+
+	// state holds the thread state.
+	// Please beware that this value is only meaningful
+	// if tid > 0.
+	state atomic.Int32
+}
+
+func (t *threadState) Type() *py.Type {
+	return PyThreadState
+}
+
 // Thread represents the Thread class.
 type Thread struct {
 	target *py.Function
 	args   py.Tuple
 
-	state atomic.Int32
+	state *threadState
 	wg    sync.WaitGroup
+}
+
+// getState returns the thread state.
+// The state is not to be confused with [threadState].
+func (t *Thread) getState() int32 {
+	return t.state.state.Load()
 }
 
 func (t *Thread) Type() *py.Type {
@@ -73,24 +114,69 @@ func (t *Thread) start() error {
 		return nil
 	}
 
-	if !t.state.CompareAndSwap(stateInitialized, stateRunning) {
+	if !t.state.state.CompareAndSwap(stateInitialized, stateRunning) {
 		return py.ExceptionNewf(py.RuntimeError, "start() can only be called once!")
 	}
 
 	t.wg.Add(1)
 	go func() {
-		py.Call(t.target, t.args, nil)
+		obj, err := py.Call(t.target, t.args, nil)
+		debugf("Returned (%T, %T) => %+v || %+v\n", obj, err, obj, err)
 
-		t.state.Store(stateFinished)
+		t.state.state.Store(stateFinished)
 		t.wg.Done()
 	}()
 
 	return nil
 }
 
+// ThreadCurrentThread implements the threading.current_thread() functionality.
+func ThreadCurrentThread(obj py.Object, _ py.Tuple) (py.Object, error) {
+	gd, ok := obj.(py.IGetDict)
+	if !ok {
+		return nil, py.ExceptionNewf(
+			py.RuntimeError,
+			"expected that obj implements py.IGetDict: %T",
+			obj,
+		)
+	}
+
+	raw, err := gd.GetDict().M__getitem__(py.String(annotThreadState))
+	if err != nil {
+		// not found => we're in the main thread.
+		// Return a dummy [Thread] object
+		return &Thread{
+			state: &threadState{},
+		}, nil
+	}
+
+	ts, ok := raw.(*threadState)
+	if !ok {
+		return nil, py.ExceptionNewf(py.RuntimeError, "expected internal threadState, got %T", raw)
+	}
+
+	threadLo.Lock()
+	th, ok := threadMap[ts.tid]
+	threadLo.Unlock()
+
+	if !ok {
+		return nil, py.ExceptionNewf(
+			py.RuntimeError,
+			"unable to find thread mapping of thread ID %d",
+			ts.tid,
+		)
+	}
+
+	return th, nil
+}
+
 // ThreadNew is the Thread_new function.
 func ThreadNew(_ py.Object, _ py.Tuple) (py.Object, error) {
-	return &Thread{}, nil
+	return &Thread{
+		state: &threadState{
+			tid: tidCounter.Add(1),
+		},
+	}, nil
 }
 
 // ThreadSetTarget is a mapper of Thread.set_target(...).
@@ -102,21 +188,25 @@ func ThreadSetTarget(self py.Object, args py.Tuple) (py.Object, error) {
 		return nil, py.ExceptionNewf(py.TypeError, "expected function, got %T", args[0])
 	}
 
+	debugf("Setting %T: %+v\n", fn, fn)
 	th.target = fn
+
+	// we annotate the function with the relevant information
+	fn.GetDict().M__setitem__(py.String(annotThreadState), th.state)
 
 	return py.None, nil
 }
 
 // ThreadIsAlive is the mapper function for Thread.is_alive().
 func ThreadIsAlive(self py.Object, _ py.Tuple) (py.Object, error) {
-	state := self.(*Thread).state.Load()
+	state := self.(*Thread).getState()
 	return py.NewBool(state != stateFinished), nil
 }
 
 // ThreadJoin is the mapper function of Thread.join(...).
 func ThreadJoin(self py.Object, args py.Tuple) (py.Object, error) {
 	th := self.(*Thread)
-	if th.state.Load() == stateInitialized {
+	if th.getState() == stateInitialized {
 		return nil, py.ExceptionNewf(
 			py.RuntimeError.Base,
 			"join() called before thread has been started",
@@ -178,4 +268,13 @@ func debugf(msg string, args ...any) {
 	if debugging {
 		fmt.Printf(msg, args...)
 	}
+}
+
+func getAnnotations(obj py.Object) (py.StringDict, error) {
+	raw, err := py.GetAttrString(obj, "__annotations__")
+	if err != nil {
+		return nil, err
+	}
+
+	return raw.(py.StringDict), nil
 }

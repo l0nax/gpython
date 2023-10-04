@@ -18,3 +18,6 @@ class Thread:
 
     def is_alive(self):
         return self._v.is_alive()
+
+def current_thread():
+    return _go.Thread_current_thread()

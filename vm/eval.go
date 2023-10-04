@@ -41,7 +41,9 @@ const debugging = false
 
 // Debug print
 func debugf(format string, a ...interface{}) {
-	fmt.Printf(format, a...)
+	if debugging {
+		fmt.Printf(format, a...)
+	}
 }
 
 // Stack operations
@@ -56,8 +58,14 @@ func (vm *Vm) SET_SECOND(v py.Object)       { vm.frame.Stack[len(vm.frame.Stack)
 func (vm *Vm) SET_THIRD(v py.Object)        { vm.frame.Stack[len(vm.frame.Stack)-3] = v }
 func (vm *Vm) SET_FOURTH(v py.Object)       { vm.frame.Stack[len(vm.frame.Stack)-4] = v }
 func (vm *Vm) SET_VALUE(n int, v py.Object) { vm.frame.Stack[len(vm.frame.Stack)-(n)] = (v) }
-func (vm *Vm) DROP()                        { vm.frame.Stack = vm.frame.Stack[:len(vm.frame.Stack)-1] }
-func (vm *Vm) DROPN(n int)                  { vm.frame.Stack = vm.frame.Stack[:len(vm.frame.Stack)-n] }
+
+func (vm *Vm) DROP() { vm.frame.Stack = vm.frame.Stack[:len(vm.frame.Stack)-1] }
+
+func (vm *Vm) DROPN(
+	n int,
+) {
+	vm.frame.Stack = vm.frame.Stack[:len(vm.frame.Stack)-n]
+}
 
 // Pop from top of vm stack
 func (vm *Vm) POP() py.Object {
@@ -604,7 +612,6 @@ func do_RETURN_VALUE(vm *Vm, arg int32) error {
 
 // Pops TOS and delegates to it as a subiterator from a generator.
 func do_YIELD_FROM(vm *Vm, arg int32) error {
-
 	var retval py.Object
 	var err error
 	u := vm.POP()
@@ -614,7 +621,6 @@ func do_YIELD_FROM(vm *Vm, arg int32) error {
 		retval, err = py.Next(x)
 	} else {
 		retval, err = py.Send(x, u)
-
 	}
 	if err != nil {
 		if !py.IsException(py.StopIteration, err) {
@@ -624,7 +630,7 @@ func do_YIELD_FROM(vm *Vm, arg int32) error {
 	}
 	// x remains on stack, retval is value to be yielded
 	// FIXME vm.frame.Stacktop = stack_pointer
-	//why = whyYield
+	// why = whyYield
 	// and repeat...
 	vm.frame.Lasti--
 
@@ -1435,7 +1441,12 @@ func _make_function(vm *Vm, argc int32, opcode OpCode) {
 	num_annotations := (argc >> 16) & 0x7fff
 	qualname := vm.POP()
 	code := vm.POP()
-	function := py.NewFunction(vm.context, code.(*py.Code), vm.frame.Globals, string(qualname.(py.String)))
+	function := py.NewFunction(
+		vm.context,
+		code.(*py.Code),
+		vm.frame.Globals,
+		string(qualname.(py.String)),
+	)
 
 	if opcode == MAKE_CLOSURE {
 		function.Closure = vm.POP().(py.Tuple)
@@ -1582,7 +1593,12 @@ func EvalGetFuncDesc(fn py.Object) string {
 // As py.Call but takes an interpreter Frame object
 //
 // Used to implement some interpreter magic like locals(), globals() etc
-func callInternal(fn py.Object, args py.Tuple, kwargs py.StringDict, f *py.Frame) (py.Object, error) {
+func callInternal(
+	fn py.Object,
+	args py.Tuple,
+	kwargs py.StringDict,
+	f *py.Frame,
+) (py.Object, error) {
 	if method, ok := fn.(*py.Method); ok {
 		switch x := method.Internal(); x {
 		case py.InternalMethodNone:
@@ -1647,7 +1663,13 @@ func (vm *Vm) Call(argc int32, starArgs py.Object, starKwargs py.Object) error {
 			k := string(kPy)
 			v := kwargsTuple[i+1]
 			if _, ok := kwargs[k]; ok {
-				return py.ExceptionNewf(py.TypeError, multipleValues, EvalGetFuncName(fn), EvalGetFuncDesc(fn), k)
+				return py.ExceptionNewf(
+					py.TypeError,
+					multipleValues,
+					EvalGetFuncName(fn),
+					EvalGetFuncDesc(fn),
+					k,
+				)
 			}
 			kwargs[k] = v
 		}
@@ -1665,7 +1687,13 @@ func (vm *Vm) Call(argc int32, starArgs py.Object, starKwargs py.Object) error {
 		}
 		for k, v := range starKwargsDict {
 			if _, ok := kwargs[k]; ok {
-				return py.ExceptionNewf(py.TypeError, multipleValues, EvalGetFuncName(fn), EvalGetFuncDesc(fn), k)
+				return py.ExceptionNewf(
+					py.TypeError,
+					multipleValues,
+					EvalGetFuncName(fn),
+					EvalGetFuncDesc(fn),
+					k,
+				)
 			}
 			kwargs[k] = v
 		}
@@ -1718,7 +1746,12 @@ func (vm *Vm) UnwindExceptHandler(frame *py.Frame, block *py.TryBlock) {
 	vm.exc.Value = vm.POP()
 	vm.exc.Traceback, _ = vm.POP().(*py.Traceback)
 	if debugging {
-		debugf("** UnwindExceptHandler exc = (type: %v, value: %v, traceback: %v)\n", vm.exc.Type, vm.exc.Value, vm.exc.Traceback)
+		debugf(
+			"** UnwindExceptHandler exc = (type: %v, value: %v, traceback: %v)\n",
+			vm.exc.Type,
+			vm.exc.Value,
+			vm.exc.Traceback,
+		)
 	}
 }
 
@@ -1730,7 +1763,7 @@ func (vm *Vm) UnwindExceptHandler(frame *py.Frame, block *py.TryBlock) {
 //
 // This is the equivalent of PyEval_EvalFrame
 func RunFrame(frame *py.Frame) (res py.Object, err error) {
-	var vm = Vm{
+	vm := Vm{
 		frame:   frame,
 		context: frame.Context,
 	}
@@ -1754,7 +1787,10 @@ func RunFrame(frame *py.Frame) (res py.Object, err error) {
 	// }
 
 	if int(frame.Lasti) >= len(frame.Code.Code) {
-		return nil, py.ExceptionNewf(py.SystemError, "vm: instruction out of range - code most likely finished already")
+		return nil, py.ExceptionNewf(
+			py.SystemError,
+			"vm: instruction out of range - code most likely finished already",
+		)
 	}
 
 	var opcode OpCode
@@ -1841,7 +1877,8 @@ func RunFrame(frame *py.Frame) (res py.Object, err error) {
 				frame.Lasti = b.Handler
 				break
 			}
-			if vm.why == whyException && (b.Type == py.TryBlockSetupExcept || b.Type == py.TryBlockSetupFinally) {
+			if vm.why == whyException &&
+				(b.Type == py.TryBlockSetupExcept || b.Type == py.TryBlockSetupFinally) {
 				if debugging {
 					debugf("*** Exception\n")
 				}
@@ -2022,7 +2059,12 @@ func tooManyPositional(co *py.Code, given, defcount int, fastlocals []py.Object)
 		sig = fmt.Sprintf("%d", co.Argcount)
 	}
 	if kwonly_given != 0 {
-		kwonly_sig = fmt.Sprintf(" positional argument%s (and %d keyword-only argument%s)", pluralSuffix(given != 1), kwonly_given, pluralSuffix(kwonly_given != 1))
+		kwonly_sig = fmt.Sprintf(
+			" positional argument%s (and %d keyword-only argument%s)",
+			pluralSuffix(given != 1),
+			kwonly_given,
+			pluralSuffix(kwonly_given != 1),
+		)
 	}
 	return py.ExceptionNewf(py.TypeError,
 		"%s() takes %s positional argument%s but %d%s %s given",
@@ -2041,7 +2083,16 @@ func tooManyPositional(co *py.Code, given, defcount int, fastlocals []py.Object)
 // Returns an Object and an error.  The error will be a py.ExceptionInfo
 //
 // This is the equivalent of PyEval_EvalCode with closure support
-func EvalCode(ctx py.Context, co *py.Code, globals, locals py.StringDict, args []py.Object, kws py.StringDict, defs []py.Object, kwdefs py.StringDict, closure py.Tuple) (retval py.Object, err error) {
+func EvalCode(
+	ctx py.Context,
+	co *py.Code,
+	globals, locals py.StringDict,
+	args []py.Object,
+	kws py.StringDict,
+	defs []py.Object,
+	kwdefs py.StringDict,
+	closure py.Tuple,
+) (retval py.Object, err error) {
 	total_args := int(co.Argcount + co.Kwonlyargcount)
 	n := len(args)
 	var kwdict py.StringDict
@@ -2050,8 +2101,8 @@ func EvalCode(ctx py.Context, co *py.Code, globals, locals py.StringDict, args [
 		return nil, py.ExceptionNewf(py.SystemError, "PyEval_EvalCodeEx: nil globals")
 	}
 
-	//assert(tstate != nil)
-	//assert(globals != nil)
+	// assert(tstate != nil)
+	// assert(globals != nil)
 	// f = PyFrame_New(tstate, co, globals, locals)
 	f := py.NewFrame(ctx, globals, locals, co, closure) // FIXME extra closure parameter?
 
@@ -2088,7 +2139,12 @@ func EvalCode(ctx py.Context, co *py.Code, globals, locals py.StringDict, args [
 			}
 		}
 		if j >= total_args && kwdict == nil {
-			return nil, py.ExceptionNewf(py.TypeError, "%s() got an unexpected keyword argument '%s'", co.Name, keyword)
+			return nil, py.ExceptionNewf(
+				py.TypeError,
+				"%s() got an unexpected keyword argument '%s'",
+				co.Name,
+				keyword,
+			)
 		}
 		kwdict[keyword] = value
 		continue
@@ -2155,7 +2211,7 @@ func EvalCode(ctx py.Context, co *py.Code, globals, locals py.StringDict, args [
 			c = py.NewCell(nil)
 		}
 		fastlocals[int(co.Nlocals)+i] = c
-		//freevars[i] = c
+		// freevars[i] = c
 	}
 	for i := 0; i < len(co.Freevars); i++ {
 		freevars[len(co.Cellvars)+i] = closure[i]

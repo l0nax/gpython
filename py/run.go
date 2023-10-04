@@ -26,6 +26,7 @@ const (
 // See examples/multi-context and examples/embedding.
 type Context interface {
 
+
 	// Resolves then compiles (if applicable) the given file system pathname into a py.Code ready to be executed.
 	ResolveAndCompile(pathname string, opts CompileOpts) (CompileOut, error)
 
